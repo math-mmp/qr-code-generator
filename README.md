@@ -5,7 +5,7 @@ https://www.thonky.com/qr-code-tutorial/
 
 ## Steps
 - [x] Step 1: Data Analysis 
-- [ ] Step 2: Data Encoding
+- [x] Step 2: Data Encoding
 - [ ] Step 3: Error Correction Coding
 - [ ] Step 4: Structure Final Message
 - [ ] Step 5: Module Placement in Matrix
