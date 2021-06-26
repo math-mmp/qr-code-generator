@@ -1,7 +1,8 @@
 from QRCode import QRCode
 
-qrCode = QRCode('UMA IMAGEM VALE MAIS DO QUE 1.000 PALAVRAS')
+qrCode = QRCode('')
 qrCode.create()
+qrCode.show()
 
 print('Tipo de Codificação:', qrCode.encodingMode)
 print('Tamanho do Texto:', len(qrCode.text))

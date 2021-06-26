@@ -5,8 +5,14 @@ from dataTables import modeIndicators as mIs
 from dataTables import characterCountIndicators as cCIs
 from dataTables import errorCorrectionCodeWordsBlockInformation as eCCWBI
 from dataTables import requiredRemainderBits as rRBs
+from dataTables import alignmentPatternLocations as aPLs
+from dataTables import formatInformationString as fISs
+from dataTables import versionInformationStrings as vISs
 
 from more_itertools import roundrobin
+from math import floor
+import numpy as np
+import cv2
 
 class QRCode:
   def __init__(self, text):
@@ -20,6 +26,9 @@ class QRCode:
     self.__messagePolynomial = []
     self.__errorCorrectionCodewords = []
     self.__finalMessage = []
+    self.size = None
+    self.__matrix = []
+    self.__mask = None
 
   """ Step 1: Data Analysis ✔️ """ 
   def __dataAnalysis(self):
@@ -49,7 +58,7 @@ class QRCode:
     self.__bitString = modeIndicator
 
     # Step 2.4: Add the Character Count Indicator ✔️
-    if 1 <= self.version <= 9:
+    if self.version <= 9:
       characterCountIndicatorSize = cCIs[self.encodingMode][0]
     elif 10 <= self.version <= 26:
       characterCountIndicatorSize = cCIs[self.encodingMode][1]
@@ -62,14 +71,14 @@ class QRCode:
     groups = []
     if self.encodingMode == 'numeric':
       for digits in range(0, len(self.text), 3):
-        groups.append(int(self.text[digits:digits + 3]))
+        groups.append(self.text[digits:digits + 3])
       binaryBits = (4, 7, 10)
-      encodedData = ''.join('{:0{size}b}'.format(x, size = binaryBits[len(str(x))-1]) for x in groups)
+      encodedData = ''.join('{:0{size}b}'.format(int(x), size = binaryBits[len(str(x))-1]) for x in groups)
     elif self.encodingMode == 'alphanumeric':
       pairs = []
       for digits in range(0, len(self.text), 2):
          pairs.append(self.text[digits:digits + 2])
-      groups = [(45* aVs.index(x[0])) + aVs.index(x[1]) if len(x) == 2 else aVs.index(x[0]) for x in pairs]
+      groups = [(45*aVs.index(x[0])) + aVs.index(x[1]) if len(x) == 2 else aVs.index(x[0]) for x in pairs]
       binaryBits = (6, 11)
       encodedData = ''.join('{:0{size}b}'.format(x, size = binaryBits[len(str(y))-1]) for x, y in zip(groups, pairs))
     else:
@@ -79,13 +88,15 @@ class QRCode:
 
     # Step 2.6: Break Up into 8-bit Codewords and Add Pad Bytes if Necessary ✔️
     bitsRequired = eCCWBI[self.errorCorretionLevel][self.version - 1][0]*8
+    for i in range(4):
+      self.__bitString += '0' if len(self.__bitString) < bitsRequired else ''
     while len(self.__bitString)%8 != 0:
       self.__bitString += '0'
     padBytes = int((bitsRequired - len(self.__bitString))/8)
     for i in range(padBytes):
       self.__bitString += '11101100' if i%2 == 0 else '00010001'
 
-  """ Step 3: Error Correction Coding ✔️ """
+  """ Step 3: Error Correction Coding """
   def __greaterThanOrEqualTo256(self, array):
     return [x%255 if x >= 256 else x for x in array]
 
@@ -133,7 +144,7 @@ class QRCode:
     # Step 3.9: Divide the Message Polynomial by the Generator Polynomial ✔️
     for steps in range(len(block)):
       generatorPolynomialMultiplied = self.__generatorPolynomial.copy()
-      leadTerm = self.__integerNotation2AlphaNotation([block[-1]])
+      leadTerm = self.__integerNotation2AlphaNotation([block[-1]]) if block[-1]!= 0 else [0]
       generatorPolynomialMultiplied = [x + leadTerm[-1] for x in generatorPolynomialMultiplied]
       generatorPolynomialMultiplied = self.__greaterThanOrEqualTo256(generatorPolynomialMultiplied)
       generatorPolynomialMultiplied = self.__alphaNotation2IntegerNotation(generatorPolynomialMultiplied)
@@ -150,31 +161,138 @@ class QRCode:
   def __structureFinalMessage(self):
     # Step 4.1: Determine How Many Blocks and Error Correction Codewords are Required ✔️
     auxMessagePolynomial = []
+    aux = 0
     for i in range(2, 5, 2):
+      blockSize = eCCWBI[self.errorCorretionLevel][self.version - 1][i+1]
       for j in range(eCCWBI[self.errorCorretionLevel][self.version - 1][i]):
-        blockSize = eCCWBI[self.errorCorretionLevel][self.version - 1][i+1]
-        auxMessagePolynomial.append(self.__messagePolynomial[blockSize*j:blockSize*(j+1)])
+        if i == 4:
+          aux = eCCWBI[self.errorCorretionLevel][self.version - 1][2] * eCCWBI[self.errorCorretionLevel][self.version - 1][3]
+        auxMessagePolynomial.append(self.__messagePolynomial[blockSize*j+aux:blockSize*(j+1)+aux])
         self.__errorCorrectionCodewords.append(self.__generateErrorCorrectionCodewords(auxMessagePolynomial[-1][::-1]))
     self.__messagePolynomial = auxMessagePolynomial.copy()
 
-    # Step 4.2: Intervale the Blocks
+    # Step 4.2: Intervale the Blocks ✔️
     self.__finalMessage = list(roundrobin(*self.__messagePolynomial)) + list(roundrobin(*self.__errorCorrectionCodewords))
 
-    # Step 4.3: Convert to Binary
+    # Step 4.3: Convert to Binary ✔️
     self.__finalMessage = ''.join('{:08b}'.format(x) for x in self.__finalMessage)
 
-    # Step 4.4: Add Remainder Bits if Necessary
+    # Step 4.4: Add Remainder Bits if Necessary ✔️
     self.__finalMessage += '0'*rRBs[self.version - 1]
 
-  """ Step 5: Module Placement in Matrix """
-  """ Step 6: Data Masking """
-  """ Step 7: Format and Version Information """
+  """ Step 5: Module Placement in Matrix ✔️ """
+  def __modulePlacement(self):
+    self.size = (self.version - 1)*4 + 21
+    self.__matrix = np.zeros((self.size, self.size))
+
+    # Step 5.1: Add the Finder Patterns ✔️
+    cv2.rectangle(self.__matrix, pt1=(0,0), pt2=(6,6), color=1, thickness=-1)
+    cv2.rectangle(self.__matrix, pt1=(1,1), pt2=(5,5), color=254, thickness=1)
+    cv2.rectangle(self.__matrix, pt1=(self.size-7,0), pt2=(self.size-1,6), color=1, thickness=-1)
+    cv2.rectangle(self.__matrix, pt1=(self.size-6,1), pt2=(self.size-2,5), color=254, thickness=1)
+    cv2.rectangle(self.__matrix, pt1=(0,self.size-7), pt2=(6,self.size-1), color=1, thickness=-1)
+    cv2.rectangle(self.__matrix, pt1=(1,self.size-6), pt2=(5,self.size-2), color=254, thickness=1)
+
+    # Step 5.2: Add the Separators ✔️
+    cv2.rectangle(self.__matrix, pt1=(-1,-1), pt2=(7,7), color=254, thickness=1)
+    cv2.rectangle(self.__matrix, pt1=(self.size-8,-1), pt2=(self.size,7), color=254, thickness=1)
+    cv2.rectangle(self.__matrix, pt1=(-1,self.size-8), pt2=(7,self.size), color=254, thickness=1)
+
+    # Step 5.3: Add the Alignment Patterns ✔️
+    alignmentPatternLocation = aPLs[self.version-1]
+    for i in alignmentPatternLocation:
+      for j in alignmentPatternLocation:
+        if self.__matrix[j-1,i-1] != 254:
+          cv2.rectangle(self.__matrix, pt1=(i-2,j-2), pt2=(i+2,j+2), color=1, thickness=-1)
+          cv2.rectangle(self.__matrix, pt1=(i-1,j-1), pt2=(i+1,j+1), color=254, thickness=1)
+    
+    # Step 5.4: Add the Timing Patterns ✔️
+    self.__matrix[8:self.size-8:2,6] = 1
+    self.__matrix[9:self.size-9:2,6] = 254
+    self.__matrix[6,8:self.size-8:2] = 1
+    self.__matrix[6,9:self.size-9:2] = 254
+
+    # Step 5.5: Add the Dark Module and Reserved Areas ✔️
+    self.__matrix[4*self.version+9,8] = 1
+
+    self.__matrix[8,0:9] = 1
+    self.__matrix[8,self.size-8:self.size] = 1
+    self.__matrix[0:8,8] = 1
+    self.__matrix[self.size-8:self.size,8] = 1
+
+    if self.version >= 7:
+      cv2.rectangle(self.__matrix, pt1=(self.size-11,0), pt2=(self.size-9,5), color=1, thickness=-1)
+      cv2.rectangle(self.__matrix, pt1=(0,self.size-11), pt2=(5,self.size-9), color=1, thickness=-1)
+
+    # Step 5.6: Place the Data Bits ✔️
+    k = 0
+    for i in range(self.size-1,0,-4):
+      if i == 4:
+        i -= 1
+      for j in range(self.size-1,-1,-1):
+        if self.__matrix[j,i] == 0:
+          self.__matrix[j,i] = 0 if self.__finalMessage[k] == '1' else 255
+          k += 1
+        if self.__matrix[j,i-1] == 0:
+          self.__matrix[j,i-1] = 0 if self.__finalMessage[k] == '1' else 255
+          k += 1
+      if i == 8:
+        i -= 1
+      for j in range(0,self.size):
+        if self.__matrix[j,i-2] == 0:
+          self.__matrix[j,i-2] = 0 if self.__finalMessage[k] == '1' else 255
+          k += 1
+        if self.__matrix[j,i-3] == 0:
+          self.__matrix[j,i-3] = 0 if self.__finalMessage[k] == '1' else 255
+          k += 1
+
+  """ Step 6: Data Masking ✔️ """
+  def __dataMasking(self):
+    self.__mask = 0
+    for i in range(self.size):
+      for j in range(self.size):
+        formulas = [
+          (i+j)%2, i%2, j%3, (i+j)%3, (floor(i/2) + floor(j/3))%2, ((i*j)%2) + ((i*j)%3), (((i*j)%2) + ((i*j)%3))%2,
+          (((i+j)%2) + ((i*j)%3))%2
+        ]
+        if formulas[self.__mask] == 0 and (self.__matrix[i,j] == 255 or self.__matrix[i,j] == 0):
+          self.__matrix[i,j] = 255 if self.__matrix[i,j] == 0 else 0
+
+  """ Step 7: Format and Version Information ✔️ """
+  def __formatVersionInformation(self):
+    formatString = [x^1 for x in list(map(int, list(fISs[self.errorCorretionLevel][self.__mask])))]
+    formatString = np.array(formatString)*255
+    self.__matrix[np.ix_([8], [0,1,2,3,4,5,7,8])] = formatString[0:8]
+    self.__matrix[8, self.size-8:] = formatString[7:]
+    self.__matrix[0:6,8] = formatString[-1:-7:-1]
+    self.__matrix[7,8] = formatString[-7]
+    self.__matrix[self.size-7:,8] = formatString[-9::-1]
+
+    if self.version >= 7:
+      versionString = [x^1 for x in list(map(int, list(reversed(vISs[self.version-7]))))]
+      versionString = np.array(versionString)*255
+      self.__matrix[self.size-11,:6] = versionString[::3]
+      self.__matrix[self.size-10,:6] = versionString[1::3]
+      self.__matrix[self.size-9,:6] = versionString[2::3]
+      self.__matrix[:6,self.size-11] = versionString[::3]
+      self.__matrix[:6,self.size-10] = versionString[1::3]
+      self.__matrix[:6,self.size-9] = versionString[2::3]
+      
 
   def create(self):
     self.__dataAnalysis()
     self.__dataEncoding()
     self.__errorCorrectionCoding()
     self.__structureFinalMessage()
+    self.__modulePlacement()
+    self.__dataMasking()
+    self.__formatVersionInformation()
 
-  # def show(self):
+  def show(self):
+    cv2.namedWindow('', cv2.WINDOW_NORMAL)
+    cv2.startWindowThread()
+    cv2.imshow('', np.uint8(self.__matrix))
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
   # def save(self):
