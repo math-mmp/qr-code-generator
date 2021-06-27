@@ -10,6 +10,8 @@ from dataTables import formatInformationString as fISs
 from dataTables import versionInformationStrings as vISs
 
 from more_itertools import roundrobin
+from tkinter import filedialog
+from random import randint
 from math import floor
 import numpy as np
 import cv2
@@ -96,7 +98,7 @@ class QRCode:
     for i in range(padBytes):
       self.__bitString += '11101100' if i%2 == 0 else '00010001'
 
-  """ Step 3: Error Correction Coding """
+  """ Step 3: Error Correction Coding ✔️ """
   def __greaterThanOrEqualTo256(self, array):
     return [x%255 if x >= 256 else x for x in array]
 
@@ -161,14 +163,13 @@ class QRCode:
   def __structureFinalMessage(self):
     # Step 4.1: Determine How Many Blocks and Error Correction Codewords are Required ✔️
     auxMessagePolynomial = []
-    aux = 0
     for i in range(2, 5, 2):
-      blockSize = eCCWBI[self.errorCorretionLevel][self.version - 1][i+1]
-      for j in range(eCCWBI[self.errorCorretionLevel][self.version - 1][i]):
-        if i == 4:
-          aux = eCCWBI[self.errorCorretionLevel][self.version - 1][2] * eCCWBI[self.errorCorretionLevel][self.version - 1][3]
-        auxMessagePolynomial.append(self.__messagePolynomial[blockSize*j+aux:blockSize*(j+1)+aux])
+      blockSize = eCCWBI[self.errorCorretionLevel][self.version-1][i+1]
+      for j in range(eCCWBI[self.errorCorretionLevel][self.version-1][i]):
+        auxMessagePolynomial.append(self.__messagePolynomial[blockSize*j:blockSize*(j+1)])
         self.__errorCorrectionCodewords.append(self.__generateErrorCorrectionCodewords(auxMessagePolynomial[-1][::-1]))
+      group2 = eCCWBI[self.errorCorretionLevel][self.version-1][2] * eCCWBI[self.errorCorretionLevel][self.version-1][3]
+      self.__messagePolynomial = self.__messagePolynomial[group2:]
     self.__messagePolynomial = auxMessagePolynomial.copy()
 
     # Step 4.2: Intervale the Blocks ✔️
@@ -248,7 +249,7 @@ class QRCode:
 
   """ Step 6: Data Masking ✔️ """
   def __dataMasking(self):
-    self.__mask = 0
+    self.__mask = randint(0,7)
     for i in range(self.size):
       for j in range(self.size):
         formulas = [
@@ -277,8 +278,9 @@ class QRCode:
       self.__matrix[:6,self.size-11] = versionString[::3]
       self.__matrix[:6,self.size-10] = versionString[1::3]
       self.__matrix[:6,self.size-9] = versionString[2::3]
-      
 
+    self.__matrix = np.pad(self.__matrix, 4, constant_values=255)
+      
   def create(self):
     self.__dataAnalysis()
     self.__dataEncoding()
@@ -289,10 +291,26 @@ class QRCode:
     self.__formatVersionInformation()
 
   def show(self):
-    cv2.namedWindow('', cv2.WINDOW_NORMAL)
-    cv2.startWindowThread()
-    cv2.imshow('', np.uint8(self.__matrix))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if self.__matrix != []:
+      cv2.namedWindow('', cv2.WINDOW_NORMAL)
+      cv2.startWindowThread()
+      cv2.imshow('', np.uint8(self.__matrix))
+      cv2.waitKey(0)
+      cv2.destroyAllWindows()
+    else:
+      print('Error: no qr code created.')
 
-  # def save(self):
+  def save(self):
+    if self.__matrix != []:
+      self.__matrix = cv2.resize(self.__matrix, (720, 720), interpolation = cv2.INTER_AREA)
+      filename = filedialog.asksaveasfilename(
+        title="choose filename",
+        defaultextension='.png',
+        initialfile='qrcode.png'
+      )
+      try:
+       cv2.imwrite(filename, self.__matrix)
+      except:
+        print('Error: no file selected.')
+    else:
+      print('Error: no qr code created.')

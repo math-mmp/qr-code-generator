@@ -1,6 +1,5 @@
 # QR Code Generator
-Meu segundo qr code generator feito em pyhton, perdi o primeiro 😑
-
+Made in python following this tutorial
 https://www.thonky.com/qr-code-tutorial/
 
 ## Steps
